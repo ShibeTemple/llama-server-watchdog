@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Server Status Dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --green: #2ea043;
+    --red: #da3633;
+    --yellow: #d29922;
+    --blue: #58a6ff;
+    --cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 20px;
+    color: var(--blue);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .subtitle { color: var(--text-dim); font-size: 11px; margin-bottom: 20px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .card h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .status-dot.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .big-number {
+    font-size: 32px;
+    font-weight: bold;
+    color: var(--cyan);
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--text-dim); }
+  .stat-value { color: var(--text); font-weight: bold; }
+
+  /* ── Activity Card ───────────────────────────────────────── */
+  .phase-badge {
+    display: inline-block;
+    font-size: 22px;
+    font-weight: bold;
+    padding: 6px 16px;
+    border-radius: 6px;
+    margin: 8px 0 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    text-align: center;
+    width: 100%;
+  }
+  .phase-idle { background: rgba(139,148,158,0.15); color: var(--text-dim); }
+  .phase-encoding { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .phase-generating { background: rgba(46,160,67,0.15); color: var(--green); }
+  .phase-both { background: rgba(136,46,228,0.15); color: #bc8cff; }
+  .activity-metrics {
+    display: grid;
+    gap: 4px;
+  }
+  .activity-metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 4px 6px;
+    border-radius: 3px;
+    background: #0d1117;
+  }
+  .activity-metric-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+  }
+  .activity-metric-value {
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--cyan);
+  }
+  .activity-metric-value.throughput { color: var(--green); }
+  .activity-metric-value.deferred { color: var(--red); }
+
+  /* ── Slot grid ─────────────────────────────────────────── */
+  #slots-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 8px;
+  }
+  .slot-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    aspect-ratio: 1 / 1;
+    min-width: 0;
+    transition: border-color 0.3s, box-shadow 0.3s;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    overflow: hidden;
+  }
+  .slot-card.busy { border-color: var(--yellow); }
+  .slot-card.processing { border-color: var(--green); box-shadow: 0 0 8px rgba(46,160,67,0.3); }
+  .slot-card.full { border-color: var(--red); box-shadow: 0 0 8px rgba(218,54,51,0.3); }
+  .slot-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+  }
+  .slot-id { font-weight: bold; color: var(--blue); font-size: 14px; }
+  .slot-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: bold;
+  }
+  .badge-idle { background: #21262d; color: var(--text-dim); }
+  .badge-busy { background: rgba(210,153,34,0.2); color: var(--yellow); }
+  .badge-proc { background: rgba(46,160,67,0.2); color: var(--green); }
+  .slot-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 4px;
+    align-content: start;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .slot-metric {
+    background: #0d1117;
+    padding: 4px 6px;
+    border-radius: 3px;
+  }
+  .slot-metric-label { color: var(--text-dim); font-size: 9px; text-transform: uppercase; line-height: 1.2; }
+  .slot-metric-value { color: var(--text); font-weight: bold; font-size: 14px; line-height: 1.2; }
+  .token-bar {
+    height: 3px;
+    background: #21262d;
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .token-bar-fill {
+    height: 100%;
+    background: var(--cyan);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+  }
+  .slot-footer {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 2px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .last-update {
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 10px;
+  }
+  .ws-status {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+  }
+  .ws-connected { background: rgba(46,160,67,0.2); color: var(--green); }
+  .ws-disconnected { background: rgba(218,54,51,0.2); color: var(--red); }
+  .ep {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 8px;
+    text-decoration: none; color: var(--blue);
+    font-size: 11px; transition: border-color 0.2s;
+  }
+  .ep:hover { border-color: var(--blue); }
+  .uptime-text { color: var(--text-dim); }
+
+  /* ── Server Metrics ──────────────────────────────────────── */
+  #metrics-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .metric-category {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .metric-category h3 {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cat-tokens h3 { color: var(--cyan); }
+  .cat-throughput h3 { color: var(--green); }
+  .cat-latency h3 { color: var(--yellow); }
+  .cat-system h3 { color: var(--blue); }
+  .metric-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(48,54,61,0.5);
+  }
+  .metric-row:last-child { border-bottom: none; }
+  .metric-name {
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 170px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .metric-val {
+    font-size: 15px;
+    font-weight: bold;
+    text-align: right;
+    min-width: 80px;
+  }
+  .val-cyan { color: var(--cyan); }
+  .val-green { color: var(--green); }
+  .val-yellow { color: var(--yellow); }
+  .val-red { color: var(--red); }
+  .val-blue { color: var(--blue); }
+  .val-text { color: var(--text); }
+  .val-unit {
+    font-size: 9px;
+    color: var(--text-dim);
+    font-weight: normal;
+    margin-left: 2px;
+  }
+  .metrics-status {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-top: 8px;
+    padding: 10px;
+    background: rgba(218,54,51,0.08);
+    border: 1px solid rgba(218,54,51,0.2);
+    border-radius: 6px;
+    text-align: center;
+  }
+  .metrics-status code {
+    color: var(--blue);
+    background: rgba(88,166,255,0.1);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+  .metrics-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+  }
+  @media (max-width: 768px) {
+    body { padding: 10px; }
+    .grid { grid-template-columns: 1fr; }
+    #slots-container { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+
+<h1>
+  <span class="status-dot green" id="statusDot"></span>
+  LLM Server Status Dashboard
+  <span class="ws-status ws-connected" id="wsStatus">WS Connected</span>
+</h1>
+<p class="subtitle">Real-time monitoring of llama.cpp server &bull; <span id="llmEndpoint"></span></p>
+
+<div class="grid">
+  <div class="card">
+    <h2><span class="status-dot green" id="serverDot"></span> Server Status</h2>
+    <div class="stat-row">
+      <span class="stat-label">Status</span>
+      <span class="stat-value" id="overallStatus">-</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Poll Count</span>
+      <span class="stat-value" id="pollCount">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Errors</span>
+      <span class="stat-value" id="errorCount">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Last Update</span>
+      <span class="stat-value" id="lastUpdate">-</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Uptime</span>
+      <span class="stat-value uptime-text" id="uptime">0s</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Slot Summary</h2>
+    <div class="stat-row">
+      <span class="stat-label">Total Slots</span>
+      <span class="stat-value" id="totalSlots">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Busy / Idle</span>
+      <span class="stat-value"><span id="busySlots" style="color:var(--yellow)">0</span> / <span id="idleSlots">0</span></span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Processing</span>
+      <span class="stat-value" style="color:var(--green)" id="procSlots">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Active Tokens</span>
+      <span class="stat-value" id="activeTokens">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Prompt Tokens</span>
+      <span class="stat-value" id="promptTokens">0</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Gen Remaining</span>
+      <span class="stat-value" id="genTokens">0</span>
+    </div>
+  </div>
+
+  <div class="card" id="activity-card">
+    <h2><span style="color:var(--cyan)">●</span> Server Activity</h2>
+    <div class="phase-badge phase-idle" id="phaseBadge">IDLE</div>
+    <div class="activity-metrics">
+      <div class="activity-metric-row">
+        <span class="activity-metric-label">Requests</span>
+        <span class="activity-metric-value" id="actRequests">0</span>
+      </div>
+      <div class="activity-metric-row">
+        <span class="activity-metric-label">Gen Throughput</span>
+        <span class="activity-metric-value throughput" id="actThroughput">0 tok/s</span>
+      </div>
+      <div class="activity-metric-row">
+        <span class="activity-metric-label">Deferred</span>
+        <span class="activity-metric-value deferred" id="actDeferred">0</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>API Endpoints (Data Proxy)</h2>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+    <span style="color:var(--text-dim);font-size:10px;text-transform:uppercase;margin-right:4px">Endpoints:</span>
+    <a class="ep" href="/api/summary" target="_blank">summary</a>
+    <a class="ep" href="/api/slots" target="_blank">slots</a>
+    <a class="ep" href="/api/health" target="_blank">health</a>
+    <a class="ep" href="/api/metrics" target="_blank">metrics</a>
+    <a class="ep" href="/api/status" target="_blank">status</a>
+    <a class="ep" href="ws://localhost:8124/ws" target="_blank">ws</a>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Active Slots</h2>
+  <div id="slots-container"></div>
+</div>
+
+<div class="card" style="margin-bottom:16px">
+  <h2>Server Metrics</h2>
+  <div id="metrics-container">
+    <div class="metrics-status">Metrics not enabled on llama.cpp server. Start with <code> --metrics</code> flag.</div>
+  </div>
+  <div class="metrics-footer">
+    <span id="metricsAvailable">Disabled</span>
+    <span>Last poll: <span id="metricsLastPoll">-</span></span>
+  </div>
+</div>
+
+<div class="last-update">Auto-refreshes via WebSocket &bull; <span id="pollInterval">Polling: 3s</span></div>
+
+<script>
+const llmEndpoint = document.getElementById('llmEndpoint');
+llmEndpoint.textContent = window.location.hostname + ':8080';
+
+let lastUpdateTime = null;
+const slotElements = {};
+
+function formatUptime(seconds) {
+  if (seconds < 60) return Math.floor(seconds) + 's';
+  if (seconds < 3600) return Math.floor(seconds/60) + 'm ' + Math.floor(seconds%60) + 's';
+  if (seconds < 86400) return Math.floor(seconds/3600) + 'h ' + Math.floor((seconds%3600)/60) + 'm';
+  return Math.floor(seconds/86400) + 'd ' + Math.floor((seconds%86400)/3600) + 'h';
+}
+
+function formatTime(isoStr) {
+  if (!isoStr) return '-';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString();
+}
+
+function formatNumber(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return Number.isInteger(n) ? n.toLocaleString() : n.toFixed(2);
+}
+
+function formatSeconds(n) {
+  if (n >= 60) return Math.floor(n/60) + 'm ' + (n%60).toFixed(0) + 's';
+  return n.toFixed(1) + 's';
+}
+
+function formatThroughput(n) {
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return n.toFixed(1);
+}
+
+function updateSlot(slot, container) {
+  if (!slot) {
+    container.innerHTML = '<div style="color:var(--text-dim);font-size:11px">No slot data</div>';
+    return;
+  }
+  const nt = slot.next_token && slot.next_token.length > 0 ? slot.next_token[0] : null;
+  const decoded = nt ? (nt.n_decoded || 0) : 0;
+  const nRemain = nt ? (nt.n_remain || 0) : 0;
+  const hasToken = nt ? (nt.has_next_token || false) : false;
+  const nCtx = slot.n_ctx || 0;
+  const pct = nCtx > 0 ? Math.min((decoded / nCtx) * 100, 100) : 0;
+  const isBusy = slot.is_processing || slot.is_running || slot.is_busy;
+  const isProcessing = slot.is_processing;
+  const full = pct > 90;
+  const cls = full ? 'full' : (isProcessing ? 'processing' : (isBusy ? 'busy' : ''));
+  const badgeCls = isProcessing ? 'badge-proc' : (isBusy ? 'badge-busy' : 'badge-idle');
+  const badgeText = isProcessing ? 'Processing' : (isBusy ? 'Busy' : 'Idle');
+  const nPredict = slot.params?.n_predict || '-';
+  const temperature = typeof slot.params?.temperature === 'number' ? slot.params.temperature.toFixed(2) : (slot.params?.temperature || '-');
+
+  container.className = 'slot-card ' + cls;
+  container.innerHTML = `
+    <div class="slot-header">
+      <span class="slot-id">Slot ${slot.id}</span>
+      <span class="slot-badge ${badgeCls}">${badgeText}</span>
+    </div>
+    <div class="slot-body">
+      <div class="slot-metric">
+        <div class="slot-metric-label">Tokens</div>
+        <div class="slot-metric-value">${decoded}</div>
+      </div>
+      <div class="slot-metric">
+        <div class="slot-metric-label">Remaining</div>
+        <div class="slot-metric-value">${nRemain}</div>
+      </div>
+      <div class="slot-metric">
+        <div class="slot-metric-label">Max Gen</div>
+        <div class="slot-metric-value">${nPredict}</div>
+      </div>
+      <div class="slot-metric">
+        <div class="slot-metric-label">Temp</div>
+        <div class="slot-metric-value">${temperature}</div>
+      </div>
+      <div class="slot-metric">
+        <div class="slot-metric-label">Task</div>
+        <div class="slot-metric-value">${slot.id_task || '-'}</div>
+      </div>
+      <div class="slot-metric">
+        <div class="slot-metric-label">Next Token</div>
+        <div class="slot-metric-value" style="color:${hasToken ? 'var(--green)' : 'var(--text-dim)'}">${hasToken ? 'Yes' : 'No'}</div>
+      </div>
+    </div>
+    <div class="token-bar">
+      <div class="token-bar-fill" style="width:${pct}%;background:${pct > 80 ? 'var(--red)' : (pct > 50 ? 'var(--yellow)' : 'var(--cyan)')}"></div>
+    </div>
+    <div class="slot-footer">${decoded}/${nCtx} ctx (${pct.toFixed(1)}%)</div>
+  `;
+}
+
+// ── Server Activity Card ─────────────────────────────────────
+// Phase detection using llama.cpp metrics:
+//   requests_processing  > 0 → encoding prompts into embeddings
+//   predicted_tokens_seconds > 0.1 → generating tokens (tok/s)
+//   Both > 0 → batch mode (encoding + decoding simultaneously)
+
+function getServerPhase(metrics) {
+  const reqProc = metrics.requests_processing || 0;
+  const genTok = metrics.predicted_tokens_seconds || 0;
+  const deferred = metrics.requests_deferred || 0;
+  const activeSlots = metrics.active_slots || 0;
+  
+  // active_slots is the authoritative indicator of real-time activity.
+  // predicted_tokens_seconds is a running average that never resets, so it
+  // can show high values long after generation has stopped.
+  if (activeSlots == 0) {
+    // No slots actively generating
+    if (reqProc > 0) {
+      return { phase: 'encoding', label: 'ENCODING', cls: 'phase-encoding', reqProc, genTok, deferred, activeSlots };
+    }
+    return { phase: 'idle', label: 'IDLE', cls: 'phase-idle', reqProc, genTok, deferred, activeSlots };
+  }
+  
+  // Slots are actively working
+  if (reqProc > 0) {
+    return { phase: 'both', label: 'BATCH', cls: 'phase-both', reqProc, genTok, deferred, activeSlots };
+  }
+  return { phase: 'generating', label: 'GENERATING', cls: 'phase-generating', reqProc, genTok, deferred, activeSlots };
+}
+
+function updateActivity(rawMetrics, summary) {
+  // Parse metrics string (Prometheus format) to extract phase-critical values
+  let m = {};
+  if (typeof rawMetrics === 'string') {
+    const lines = rawMetrics.split('\n');
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || t.startsWith('# TYPE') || t.startsWith('# HELP')) continue;
+      const parts = t.split(/\s+/);
+      if (parts.length >= 2 && parts[0].includes('llamacpp')) {
+        // Store with short name (after colon) so getServerPhase can find it
+        const shortKey = parts[0].split(':').pop();
+        m[shortKey] = parseFloat(parts[parts.length - 1]) || 0;
+      }
+    }
+  } else if (typeof rawMetrics === 'object') {
+    m = rawMetrics;
+  }
+  // Prefer active_slots from summary, fall back to requests_processing
+  const summaryActive = (summary && summary.active_slots != null) ? summary.active_slots : undefined;
+  m.active_slots = summaryActive;
+
+  const { phase, label, cls, reqProc, genTok, deferred, activeSlots } = getServerPhase(m);
+
+  document.getElementById('phaseBadge').className = 'phase-badge ' + cls;
+  document.getElementById('phaseBadge').textContent = label;
+  document.getElementById('actRequests').textContent = reqProc + (activeSlots > 0 ? ` (${activeSlots} slots)` : '');
+  document.getElementById('actThroughput').textContent = genTok > 0.1 ? genTok.toFixed(1) + ' tok/s' : '—';
+  document.getElementById('actDeferred').textContent = deferred > 0 ? deferred : '—';
+}
+
+// ── Metrics Rendering ─────────────────────────────────────────
+const METRIC_META = {
+  'llamacpp:prompt_tokens_total':           { label: 'Prompt tokens',        unit: '',       cat: 'tokens',     cls: 'val-cyan' },
+  'llamacpp:tokens_predicted_total':         { label: 'Generated tokens',     unit: '',       cat: 'tokens',     cls: 'val-cyan' },
+  'llamacpp:n_decode_total':                 { label: 'Decoding calls',       unit: '',       cat: 'tokens',     cls: 'val-blue' },
+  'llamacpp:n_tokens_max':                   { label: 'Peak tokens seen',     unit: '',       cat: 'tokens',     cls: 'val-yellow' },
+  'llamacpp:prompt_tokens_seconds':          { label: 'Prompt throughput',    unit: 'tok/s',  cat: 'throughput', cls: 'val-green' },
+  'llamacpp:predicted_tokens_seconds':       { label: 'Gen throughput',       unit: 'tok/s',  cat: 'throughput', cls: 'val-green' },
+  'llamacpp:prompt_seconds_total':           { label: 'Prompt processing',    unit: '',       cat: 'latency',    cls: 'val-yellow' },
+  'llamacpp:tokens_predicted_seconds_total': { label: 'Gen processing',       unit: '',       cat: 'latency',    cls: 'val-yellow' },
+  'llamacpp:requests_processing':            { label: 'Active requests',      unit: '',       cat: 'system',     cls: 'val-green' },
+  'llamacpp:requests_deferred':              { label: 'Deferred requests',    unit: '',       cat: 'system',     cls: 'val-red' },
+  'llamacpp:n_busy_slots_per_decode':        { label: 'Busy slots / decode',  unit: '',       cat: 'system',     cls: 'val-blue' },
+};
+
+const METRIC_FORMATTERS = {
+  'tokens': (v) => formatNumber(v),
+  'throughput': (v) => formatThroughput(v),
+  'latency': (v) => formatSeconds(v),
+  'system': (v) => v % 1 !== 0 ? v.toFixed(2) : Math.floor(v).toLocaleString(),
+};
+
+const CAT_HEADERS = {
+  tokens:     '<span style="color:var(--cyan)">●</span> Token Counts',
+  throughput: '<span style="color:var(--green)">●</span> Throughput',
+  latency:    '<span style="color:var(--yellow)">●</span> Latency',
+  system:     '<span style="color:var(--blue)">●</span> System State',
+};
+
+function updateMetrics(metrics, lastUpdate) {
+  const container = document.getElementById('metrics-container');
+  const statusEl = document.getElementById('metricsAvailable');
+  const lastPollEl = document.getElementById('metricsLastPoll');
+
+  if (!metrics || (typeof metrics === 'object' && metrics.error)) {
+    container.innerHTML = '<div class="metrics-status">Metrics not enabled on llama.cpp server. Start with <code style="color:var(--blue)">--metrics</code> flag.</div>';
+    statusEl.textContent = 'Disabled';
+    statusEl.style.color = 'var(--text-dim)';
+    lastPollEl.textContent = lastUpdate ? formatTime(lastUpdate) : '-';
+    return;
+  }
+
+  statusEl.textContent = 'Enabled';
+  statusEl.style.color = 'var(--green)';
+  lastPollEl.textContent = lastUpdate ? formatTime(lastUpdate) : '-';
+
+  // Parse Prometheus-style text or JSON object
+  let metricsData = {};
+  if (typeof metrics === 'string') {
+    const lines = metrics.split('\n');
+    let currentKey = null;
+    lines.forEach(line => {
+      line = line.trim();
+      if (!line || line.startsWith('# TYPE')) return;
+      const helpMatch = line.match(/^# HELP\s+(\S+)\s+(.+)$/);
+      if (helpMatch) {
+        currentKey = helpMatch[1];
+        return;
+      }
+      const parts = line.split(/\s+/);
+      if (parts.length >= 2) {
+        const name = parts[0];
+        const value = parseFloat(parts[parts.length - 1]);
+        if (!isNaN(value) && name.includes('llamacpp')) {
+          metricsData[name] = value;
+        }
+      }
+    });
+  } else if (typeof metrics === 'object') {
+    metricsData = metrics;
+  }
+
+  // Group by category using METRIC_META
+  const categories = { tokens: {}, throughput: {}, latency: {}, system: {} };
+  let unknown = {};
+  let hasData = false;
+
+  for (const [key, value] of Object.entries(metricsData)) {
+    const meta = METRIC_META[key];
+    if (meta) {
+      categories[meta.cat][key] = { value, label: meta.label, unit: meta.unit, cls: meta.cls };
+      hasData = true;
+    } else {
+      unknown[key] = value;
+    }
+  }
+
+  if (!hasData) {
+    container.innerHTML = '<div class="metrics-status">No recognized metrics data</div>';
+    return;
+  }
+
+  // Build HTML — only render categories that have data
+  let html = '';
+  for (const [catKey, items] of Object.entries(categories)) {
+    const keys = Object.keys(items);
+    if (keys.length === 0) continue;
+
+    const formatters = METRIC_FORMATTERS[catKey];
+    html += `<div class="metric-category cat-${catKey}">
+      <h3>${CAT_HEADERS[catKey]}</h3>`;
+
+    for (const [key, item] of Object.entries(items)) {
+      const formatted = formatters(item.value);
+      const unitHtml = item.unit ? `<span class="val-unit">${item.unit}</span>` : '';
+      html += `<div class="metric-row">
+        <span class="metric-name" title="${key}">${item.label}</span>
+        <span class="metric-val ${item.cls}">${formatted}${unitHtml}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Unknown metrics as fallback
+  const unknownKeys = Object.keys(unknown);
+  if (unknownKeys.length > 0) {
+    html += `<div class="metric-category cat-system">
+      <h3><span style="color:var(--text-dim)">●</span> Other Metrics</h3>`;
+    for (const key of unknownKeys) {
+      const val = typeof unknown[key] === 'number'
+        ? (unknown[key] % 1 !== 0 ? unknown[key].toFixed(2) : Math.floor(unknown[key]).toLocaleString())
+        : unknown[key];
+      html += `<div class="metric-row">
+        <span class="metric-name" title="${key}">${key}</span>
+        <span class="metric-val val-text">${val}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+connectWS();
+
+function connectWS() {
+  const ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+  ws.onopen = function() {
+    document.getElementById('wsStatus').textContent = 'WS Connected';
+    document.getElementById('wsStatus').className = 'ws-status ws-connected';
+  };
+
+  ws.onclose = function() {
+    document.getElementById('wsStatus').textContent = 'WS Disconnected';
+    document.getElementById('wsStatus').className = 'ws-status ws-disconnected';
+    setTimeout(connectWS, 3000);
+  };
+
+  ws.onmessage = function(e) {
+    const data = JSON.parse(e.data);
+
+    // Status dot
+    const dot = document.getElementById('statusDot');
+    dot.className = 'status-dot ' + (data.error_count === 0 ? 'green' : 'red');
+
+    // Server status
+    document.getElementById('serverDot').className = 'status-dot ' + (data.error_count === 0 ? 'green' : 'red');
+    document.getElementById('overallStatus').textContent = data.status === 'ok' ? 'OK' : 'DEGRADED';
+    document.getElementById('overallStatus').style.color = data.status === 'ok' ? 'var(--green)' : 'var(--red)';
+    document.getElementById('pollCount').textContent = data.poll_count || 0;
+    document.getElementById('errorCount').textContent = data.error_count || 0;
+    document.getElementById('lastUpdate').textContent = formatTime(data.last_update);
+
+    // Uptime
+    document.getElementById('uptime').textContent = formatUptime(data.server_uptime || 0);
+
+    // Summary
+    const s = data.summary;
+    document.getElementById('totalSlots').textContent = s.total || 0;
+    document.getElementById('busySlots').textContent = s.busy || 0;
+    document.getElementById('idleSlots').textContent = (s.total || 0) - (s.busy || 0);
+    document.getElementById('procSlots').textContent = s.processing || 0;
+    document.getElementById('activeTokens').textContent = s.active_tokens || 0;
+    document.getElementById('promptTokens').textContent = s.total_prompt_tokens || 0;
+    document.getElementById('genTokens').textContent = s.total_generation_tokens || 0;
+
+    // Live poll interval
+    const pi = document.getElementById('pollInterval');
+    if (pi) {
+        const interval = data.current_poll_interval || 3;
+        pi.textContent = 'Polling: ' + interval + 's';
+        pi.style.color = interval === 1 ? 'var(--yellow)' : 'var(--text-dim)';
+    }
+
+    // Slots
+    const container = document.getElementById('slots-container');
+    if (!data.slots || !Array.isArray(data.slots)) {
+      container.innerHTML = '<div style="color:var(--text-dim);font-size:11px">No slot data</div>';
+      return;
+    }
+
+    data.slots.forEach(slot => {
+      if (!slotElements[slot.id]) {
+        const div = document.createElement('div');
+        container.appendChild(div);
+        slotElements[slot.id] = div;
+      }
+      updateSlot(slot, slotElements[slot.id]);
+    });
+
+    // Remove stale slots
+    const currentIds = new Set(data.slots.map(s => s.id));
+    Object.keys(slotElements).forEach(id => {
+      if (!currentIds.has(Number(id))) {
+        container.removeChild(slotElements[id]);
+        delete slotElements[id];
+      }
+    });
+
+    // Server Activity
+    updateActivity(data.metrics, data.summary);
+
+    // Metrics
+    updateMetrics(data.metrics, data.last_update);
+  };
+}
+</script>
+
+</body>
+</html>

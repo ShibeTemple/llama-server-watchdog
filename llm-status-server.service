@@ -1,0 +1,17 @@
+[Unit]
+Description=LLM Server Status Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/llm_status_server
+ExecStart=/usr/bin/python3 /root/llm_status_server/server.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/root/llm_status_server/.env
+StandardOutput=append:/var/log/llmstatusserver2.log
+StandardError=append:/var/log/llmstatusserver2.log
+
+[Install]
+WantedBy=multi-user.target
